@@ -34,9 +34,10 @@ type ServerConfig struct {
 	Mode string `mapstructure:"mode"` // debug / release / test
 }
 
-// DatabaseConfig PostgreSQL 连接配置。
+// DatabaseConfig 数据库连接配置 (支持 PostgreSQL 和 SQLite)。
 type DatabaseConfig struct {
-	Host         string `mapstructure:"host"`
+	Path         string `mapstructure:"path"`           // SQLite 文件路径 (单机模式)
+	Host         string `mapstructure:"host"`            // PostgreSQL 主机 (Docker 模式)
 	Port         int    `mapstructure:"port"`
 	User         string `mapstructure:"user"`
 	Password     string `mapstructure:"password"`

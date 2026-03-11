@@ -32,9 +32,9 @@ func GetWeather(c *gin.Context) {
 	ctx := context.Background()
 	cacheKey := fmt.Sprintf("weather:%s", city)
 
-	// 1. 尝试读取 Redis 缓存
-	cached, err := database.RDB.Get(ctx, cacheKey).Result()
-	if err == nil && cached != "" {
+	// 1. 尝试读取缓存
+	cached, ok := database.CacheGet(ctx, cacheKey)
+	if ok && cached != "" {
 		// 【修复】反序列化为 JSON 对象后返回
 		var cachedData map[string]interface{}
 		if jsonErr := json.Unmarshal([]byte(cached), &cachedData); jsonErr == nil {
@@ -67,7 +67,7 @@ func GetWeather(c *gin.Context) {
 	}
 	// 【修复】使用 json.Marshal 序列化存储，而非 fmt.Sprintf
 	jsonBytes, _ := json.Marshal(weatherData)
-	database.RDB.Set(ctx, cacheKey, string(jsonBytes), ttl)
+	database.CacheSet(ctx, cacheKey, string(jsonBytes), ttl)
 
 	response.OK(c, gin.H{
 		"source": "api",
@@ -120,10 +120,10 @@ func GetNews(c *gin.Context) {
 	ctx := context.Background()
 	cacheKey := fmt.Sprintf("news:%s:%s", city, tab)
 
-	// 1. 尝试读取 Redis 缓存 (无关键字搜索时)
+	// 1. 尝试读取缓存 (无关键字搜索时)
 	if keyword == "" {
-		cached, err := database.RDB.Get(ctx, cacheKey).Result()
-		if err == nil && cached != "" {
+		cached, ok := database.CacheGet(ctx, cacheKey)
+		if ok && cached != "" {
 			response.OK(c, gin.H{
 				"source": "cache",
 				"city":   city,

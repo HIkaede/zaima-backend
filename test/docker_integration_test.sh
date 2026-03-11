@@ -65,8 +65,12 @@ BODY=$(echo "$RESP" | head -1)
 STATUS=$(echo "$RESP" | tail -1)
 assert_status "POST /auth/sms-code (老人)" 200 "$STATUS" "$BODY"
 
-# 从 Redis 读取验证码
-ELDER_CODE=$(docker exec zaima-redis redis-cli GET "sms:code:$ELDER_PHONE" 2>/dev/null | tr -d '"')
+# 提取验证码 (开发模式下直接从响应中拿，如果是生产需要去读日志或 Redis，这里走通用逻辑)
+ELDER_CODE=$(echo "$BODY" | jq -r '.data.code // empty')
+if [ -z "$ELDER_CODE" ]; then
+    # 如果接口没直接返回 (例如非 debug 模式)，尝试从本地 Redis 读以便兼容旧 Docker 模式
+    ELDER_CODE=$(docker exec zaima-redis redis-cli GET "sms:code:$ELDER_PHONE" 2>/dev/null | tr -d '"')
+fi
 echo "  📱 老人验证码: $ELDER_CODE"
 
 # 登录
@@ -93,7 +97,12 @@ RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE/api/v1/auth/sms-code" \
 STATUS=$(echo "$RESP" | tail -1)
 assert_status "POST /auth/sms-code (年轻人)" 200 "$STATUS"
 
-YOUTH_CODE=$(docker exec zaima-redis redis-cli GET "sms:code:$YOUTH_PHONE" 2>/dev/null | tr -d '"')
+BODY=$(echo "$RESP" | head -1)
+
+YOUTH_CODE=$(echo "$BODY" | jq -r '.data.code // empty')
+if [ -z "$YOUTH_CODE" ]; then
+    YOUTH_CODE=$(docker exec zaima-redis redis-cli GET "sms:code:$YOUTH_PHONE" 2>/dev/null | tr -d '"')
+fi
 
 RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE/api/v1/auth/login" \
   -H "Content-Type: application/json" \
@@ -248,7 +257,11 @@ HACKER_PHONE="138000${SUFFIX}9"
 RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE/api/v1/auth/sms-code" \
   -H "Content-Type: application/json" \
   -d "{\"phone\":\"$HACKER_PHONE\"}")
-HACKER_CODE=$(docker exec zaima-redis redis-cli GET "sms:code:$HACKER_PHONE" 2>/dev/null | tr -d '"')
+BODY=$(echo "$RESP" | head -1)
+HACKER_CODE=$(echo "$BODY" | jq -r '.data.code // empty')
+if [ -z "$HACKER_CODE" ]; then
+    HACKER_CODE=$(docker exec zaima-redis redis-cli GET "sms:code:$HACKER_PHONE" 2>/dev/null | tr -d '"')
+fi
 RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE/api/v1/auth/login" \
   -H "Content-Type: application/json" \
   -d "{\"phone\":\"$HACKER_PHONE\",\"code\":\"$HACKER_CODE\",\"role\":2}")

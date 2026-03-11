@@ -1,0 +1,56 @@
+# ============================================================
+# "在吗" APP 后端配置 - 单机部署版 (SQLite + 内存缓存)
+# 无需 PostgreSQL 和 Redis，编译后单二进制即可运行
+# ============================================================
+
+server:
+  port: 9090
+  mode: debug  # debug / release / test
+
+database:
+  path: ./zaima.db  # SQLite 数据库文件路径
+
+jwt:
+  secret: "zaima-jwt-secret-change-in-production"
+  expire_hours: 720  # 30 天
+
+sms:
+  provider: aliyun
+  access_key_id: ""
+  access_key_secret: ""
+  sign_name: "在吗"
+  template_code: ""
+
+oss:
+  provider: aliyun
+  endpoint: ""
+  access_key_id: ""
+  access_key_secret: ""
+  bucket_name: zaima-media
+
+llm:
+  provider: deepseek
+  api_key: ""
+  base_url: "https://api.deepseek.com/v1"
+  model: "deepseek-chat"
+  timeout_seconds: 10
+
+weather:
+  api_key: ""
+  base_url: "https://devapi.qweather.com/v7"
+  cache_ttl_hours: 12
+
+news:
+  api_key: ""
+  base_url: "https://v.juhe.cn/toutiao/index"
+  cache_ttl_hours: 12
+
+stt:
+  provider: aliyun
+  access_key_id: ""
+  access_key_secret: ""
+  app_key: ""
+
+push:
+  app_key: ""
+  master_secret: ""

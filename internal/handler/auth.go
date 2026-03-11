@@ -37,7 +37,7 @@ type LoginReq struct {
 // SendSMSCode 发送短信验证码。
 // POST /api/v1/auth/sms-code
 //
-// 流程：生成6位验证码 -> 存入 Redis (5分钟有效) -> 调用短信 API 发送。
+// 流程：生成6位验证码 -> 存入缓存 (5分钟有效) -> 调用短信 API 发送。
 // 开发环境下验证码直接返回，方便联调。
 func SendSMSCode(c *gin.Context) {
 	var req SendCodeReq
@@ -54,16 +54,15 @@ func SendSMSCode(c *gin.Context) {
 
 	// 【短信频控】每个手机号 60 秒内只能发送一次 (防短信轰炸)
 	lockKey := fmt.Sprintf("sms:lock:%s", req.Phone)
-	locked, _ := database.RDB.SetNX(context.Background(), lockKey, "1", 60*time.Second).Result()
-	if !locked {
+	if !database.CacheSetNX(context.Background(), lockKey, "1", 60*time.Second) {
 		response.Fail(c, 1008, "发送太频繁，请 60 秒后重试")
 		return
 	}
 
-	// 生成验证码并存入 Redis，有效期5分钟
+	// 生成验证码并存入缓存，有效期5分钟
 	code := utils.GenerateSMSCode()
-	redisKey := fmt.Sprintf("sms:code:%s", req.Phone)
-	database.RDB.Set(context.Background(), redisKey, code, 5*time.Minute)
+	cacheKey := fmt.Sprintf("sms:code:%s", req.Phone)
+	database.CacheSet(context.Background(), cacheKey, code, 5*time.Minute)
 
 	// TODO: 接入阿里云短信 SDK 实际发送验证码
 	// 开发环境下直接返回验证码方便调试
@@ -88,14 +87,14 @@ func Login(c *gin.Context) {
 	}
 
 	// 1. 校验验证码
-	redisKey := fmt.Sprintf("sms:code:%s", req.Phone)
-	cachedCode, err := database.RDB.Get(context.Background(), redisKey).Result()
-	if err != nil || cachedCode != req.Code {
+	cacheKey := fmt.Sprintf("sms:code:%s", req.Phone)
+	cachedCode, ok := database.CacheGet(context.Background(), cacheKey)
+	if !ok || cachedCode != req.Code {
 		response.Fail(c, 1001, "验证码错误或已过期")
 		return
 	}
 	// 验证通过后立即删除验证码，防止重放
-	database.RDB.Del(context.Background(), redisKey)
+	database.CacheDel(context.Background(), cacheKey)
 
 	// 2. 查询用户是否已存在，不存在则自动注册
 	var user model.User

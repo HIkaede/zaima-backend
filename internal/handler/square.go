@@ -4,6 +4,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -76,18 +77,20 @@ func PublishBubble(c *gin.Context) {
 		return
 	}
 
-	// 写入 Redis GEO 用于地理位置范围查询
+	// 写入 Redis GEO 用于地理位置范围查询 (若可用)
 	ctx := context.Background()
-	geoKey := "square:geo"
-	memberKey := fmt.Sprintf("bubble:%d", bubble.ID)
+	if database.RDB != nil {
+		geoKey := "square:geo"
+		memberKey := fmt.Sprintf("bubble:%d", bubble.ID)
 
-	database.RDB.GeoAdd(ctx, geoKey, &redis.GeoLocation{
-		Name:      memberKey,
-		Longitude: req.Longitude,
-		Latitude:  req.Latitude,
-	})
+		database.RDB.GeoAdd(ctx, geoKey, &redis.GeoLocation{
+			Name:      memberKey,
+			Longitude: req.Longitude,
+			Latitude:  req.Latitude,
+		})
+	}
 	// 设置4小时后自动过期 (使用单独的 key 标记 TTL)
-	database.RDB.Set(ctx, fmt.Sprintf("square:ttl:%d", bubble.ID), "1", 4*time.Hour)
+	database.CacheSet(ctx, fmt.Sprintf("square:ttl:%d", bubble.ID), "1", 4*time.Hour)
 
 	response.OKWithMsg(c, "发布成功", gin.H{"bubble_id": bubble.ID})
 }
@@ -113,21 +116,35 @@ func GetBubbles(c *gin.Context) {
 
 	// 1. 优先使用 GEO 查询附近气泡
 	if lng != 0 && lat != 0 {
-		results, err := database.RDB.GeoRadius(ctx, "square:geo", lng, lat, &redis.GeoRadiusQuery{
-			Radius: radius,
-			Unit:   "m",
-			Sort:   "ASC",
-			Count:  50,
-		}).Result()
-		if err == nil {
-			for _, loc := range results {
-				var id uint64
-				_, _ = fmt.Sscanf(loc.Name, "bubble:%d", &id)
-				if id > 0 {
-					// 检查是否已过期
-					exists, _ := database.RDB.Exists(ctx, fmt.Sprintf("square:ttl:%d", id)).Result()
-					if exists > 0 {
-						bubbleIDs = append(bubbleIDs, id)
+		if database.RDB != nil {
+			// Redis 环境下使用 GeoRadius
+			results, err := database.RDB.GeoRadius(ctx, "square:geo", lng, lat, &redis.GeoRadiusQuery{
+				Radius: radius,
+				Unit:   "m",
+				Sort:   "ASC",
+				Count:  50,
+			}).Result()
+			if err == nil {
+				for _, loc := range results {
+					var id uint64
+					_, _ = fmt.Sscanf(loc.Name, "bubble:%d", &id)
+					if id > 0 {
+						// 检查是否已过期
+						if database.CacheExists(ctx, fmt.Sprintf("square:ttl:%d", id)) {
+							bubbleIDs = append(bubbleIDs, id)
+						}
+					}
+				}
+			}
+		} else {
+			// SQLite/单机环境下使用内存里的距离计算 (Haversine 方式)
+			var activeBubbles []model.SquareBubble
+			database.DB.Where("status = 1 AND expire_at > ?", time.Now()).Find(&activeBubbles)
+			for _, b := range activeBubbles {
+				dist := haversineDistance(lat, lng, b.Latitude, b.Longitude)
+				if dist <= radius {
+					if database.CacheExists(ctx, fmt.Sprintf("square:ttl:%d", b.ID)) {
+						bubbleIDs = append(bubbleIDs, b.ID)
 					}
 				}
 			}
@@ -200,12 +217,30 @@ func MatchConfirm(c *gin.Context) {
 
 	// 清除 Redis GEO 和 TTL 数据
 	ctx := context.Background()
-	memberKey := fmt.Sprintf("bubble:%d", bubble.ID)
-	database.RDB.ZRem(ctx, "square:geo", memberKey)
-	database.RDB.Del(ctx, fmt.Sprintf("square:ttl:%d", bubble.ID))
+	if database.RDB != nil {
+		memberKey := fmt.Sprintf("bubble:%d", bubble.ID)
+		database.RDB.ZRem(ctx, "square:geo", memberKey)
+	}
+	database.CacheDel(ctx, fmt.Sprintf("square:ttl:%d", bubble.ID))
 
 	// TODO: 通过 WebSocket 通知其他正在和发布者聊天的用户：
 	// 发送 { type: "match_ended", bubble_id: xxx, message: "对方已找到玩伴，聊天结束" }
 
 	response.OKWithMsg(c, "匹配成功，气泡已消失", nil)
+}
+
+// haversineDistance 计算两个经纬度之间的距离，返回单位为米。
+func haversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
+	const R = 6371000 // 地球半径(米)
+	dLat := (lat2 - lat1) * math.Pi / 180.0
+	dLon := (lon2 - lon1) * math.Pi / 180.0
+
+	lat1 = lat1 * math.Pi / 180.0
+	lat2 = lat2 * math.Pi / 180.0
+
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
+		math.Sin(dLon/2)*math.Sin(dLon/2)*math.Cos(lat1)*math.Cos(lat2)
+	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+
+	return R * c
 }
